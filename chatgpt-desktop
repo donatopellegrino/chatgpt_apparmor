@@ -1,0 +1,283 @@
+# ChatGPT desktop: strict resource policy, Ubuntu 26.04 amd64.
+# Verified 2026-10-11: 36 resource checks, HTTPS and native Tailscale SSH tasks.
+# See GOALS-AND-REPORT.md for exact scope. No custom runtime programs required.
+#
+# GOALS: no local privilege elevation or arbitrary executable launches; no
+# personal hidden-file or Documents/Private access; only configured attachment
+# reads and download writes; separate application state; native browser Work,
+# clipboard and SSH remote projects. Audio, camera and screen control denied.
+# Generated JavaScript remains possible under these same resource restrictions.
+# Remote SSH tasks execute on the remote account, whose permissions are separate.
+#
+# Edit CG_HOME, CG_UID (id -u), and CG_WAYLAND ($WAYLAND_DISPLAY) before use.
+# CG_APPDATA is ONLY
+# for this confined application. Never point unconfined Codex/other programs at
+# this state tree. The normal ~/.codex, SSH keys and browser data stay inaccessible.
+# REQUIRED stock systemd launch (no custom runtime helper or unit file):
+# AppArmor alone cannot isolate filesystem socket peers. PrivateTmp prevents
+# connection to other unconfined Codex browser brokers at the same /tmp path.
+# Use the SYSTEM manager: user-manager PrivateTmp stacks unprivileged_userns
+# on this Ubuntu release and prevents Chromium's sandbox from starting.
+# sudo authorizes namespace setup; --uid/--gid keep ChatGPT non-root.
+#   app_state="$HOME/ChatGPT/AppData"
+#   mkdir -p "$app_state/tmp"
+#   sudo systemd-run --unit=chatgpt-confined --collect \
+#     --uid="$(id -u)" --gid="$(id -g)" -p PrivateTmp=yes \
+#     --working-directory="$app_state" \
+#     --setenv=HOME="$app_state" --setenv=TMPDIR="$app_state/tmp" \
+#     --setenv=CODEX_HOME="$app_state/.codex" \
+#     --setenv=XDG_CONFIG_HOME="$app_state/.config" \
+#     --setenv=XDG_CACHE_HOME="$app_state/.cache" \
+#     --setenv=XDG_DATA_HOME="$app_state/.local/share" \
+#     --setenv=XDG_STATE_HOME="$app_state/.local/state" \
+#     --setenv=XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
+#     --setenv=WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
+#     --setenv=DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" \
+#     /usr/lib/chatgpt/ChatGPT --ozone-platform=wayland --disable-dev-shm-usage
+# Run from your graphical session; preserve its runtime directory and D-Bus.
+# Verify systemctl show chatgpt-confined -p PrivateTmp -p User -p MainPID.
+# Do not launch through the ordinary icon without this required isolation.
+# In this app-specific CODEX_HOME/config.toml, set the stock [desktop] setting:
+#   projectlessWorkspaceRoot = "/home/YOUR_USER/ChatGPT/Downloads/Work"
+#
+# Native SSH discovery uses $HOME/.ssh/config: put ONLY the ChatGPT host aliases
+# in ChatGPT/AppData/.ssh/config. Keep it read-only to the confined app. OpenSSH
+# itself uses the OS account home; for alias connections configure the same
+# aliases in a root-owned /etc/ssh/ssh_config.d/chatgpt.conf. Direct host entries
+# in the native app can avoid aliases. No ProxyCommand/LocalCommand/agent use.
+# Tailscale normally provides the network and authentication; its daemon/state
+# stay outside the app. The local Tailscale administration socket is denied.
+# Dedicated key-based SSH is optional; only the SSH child may read CG_SSH_KEY.
+#
+# With ChatGPT fully quit, compile strictly before changing installed policy:
+#   sudo apparmor_parser -Q -K --Werror --warn=rule-not-enforced ./chatgpt-desktop
+# Back up the vendor /etc/apparmor.d/chatgpt outside /etc/apparmor.d, unload it,
+# then install this file in its place and load with apparmor_parser -r -K using
+# the same --Werror --warn=rule-not-enforced flags. Restore the backup if loading
+# fails. The test VM uses /etc/apparmor.d/chatgpt-desktop instead of vendor name.
+# Launches without the specified state environment may fail closed.
+#
+# LIMITS: kernel/library vulnerabilities are not ruled out. Network access is
+# ordinary IPv4/IPv6, including loopback/LAN/VPN; normal OS routing applies.
+# Audio is disabled: the unconfined Pulse service accepts module-load requests.
+# No VPN kill switch is provided by this file.
+# Allowed files and clipboard can be transmitted. The file chooser is an
+# unconfined desktop service and may display filenames the app cannot read.
+# Copies of sensitive data into allowed attachment/download trees are readable.
+# No unconfined program should execute code or command configuration from the
+# writable app/download/temp trees. AppArmor confines processes, not future
+# consumers of data. Physical devices and remote permissions require testing.
+
+abi <abi/5.0>,
+include <tunables/global>
+
+# EDIT HERE: exact user home, dedicated application state and shared folders.
+@{CG_HOME} = /home/dummy
+@{CG_UID} = 1000
+@{CG_WAYLAND} = wayland-0
+@{CG_APPDATA} = @{CG_HOME}/ChatGPT/AppData
+@{CG_ATTACHMENTS} = @{CG_HOME}/ChatGPT/Attachments
+@{CG_BLOCKED} = @{CG_HOME}/Documents @{CG_HOME}/Private
+@{CG_DOWNLOADS} = @{CG_HOME}/Downloads @{CG_HOME}/ChatGPT/Downloads
+# SSH uses a dedicated key; put the remote alias in the ordinary SSH config.
+# Do not use ProxyCommand, LocalCommand, or SSH-agent forwarding for that alias.
+@{CG_SSH_KEY} = @{CG_APPDATA}/.ssh/chatgpt_ed25519
+
+profile chatgpt-desktop /usr/lib/chatgpt/ChatGPT flags=(attach_disconnected.path=/att/chatgpt-desktop/) {
+  include <abstractions/base>
+  include <abstractions/nameservice-strict>
+  include <abstractions/fonts>
+  include <abstractions/ssl_certs>
+
+  # Official app and its required, fixed vendor helpers only.
+  /usr/lib/chatgpt/{,**} mr,
+  /usr/lib/chatgpt/ChatGPT ix,
+  /usr/lib/chatgpt/browser_crashpad_handler ix,
+  /usr/lib/chatgpt/resources/{codex,codex-code-mode-host} ix,
+  /usr/lib/chatgpt/resources/cua_node/bin/{node,node_repl} ix,
+  /usr/bin/ssh Cx -> ssh,
+  # Stock desktop path resolution; its child has no home-file writes/network.
+  /usr/bin/pwd Cx -> paths,
+  /usr/lib/cargo/bin/coreutils/pwd Cx -> paths,
+  audit deny /usr/bin/bwrap x, # Optional GTK decoder sandbox; Chromium previews work.
+  audit deny /{,usr/}bin/{sh,bash,dash,zsh,fish,python*,perl*,ruby*,node*,php*,sudo,su,pkexec,systemctl,aa-exec,unshare,nsenter,gdb,strace,curl,wget} x,
+  # Every other executable is denied by default, including app-written files.
+
+  /usr/share/{glib-2.0,mime,icons,themes,locale,locale-langpack,zoneinfo,X11/xkb,xkeyboard-config-2,drirc.d,poppler,glycin-loaders}/{,**} r,
+  /usr/lib/*/{gconv,gio/modules,gdk-pixbuf-2.0}/{,**} mr,
+  /etc/{machine-id,os-release,localtime,locale.alias,locale.gen,ld.so.cache} r,
+  /etc/gtk-{3,4}.0/{,**} r,
+  /usr/lib/os-release r,
+  /etc/codex/{,requirements.toml,config.toml} r,
+  /sys/devices/system/cpu/** r,
+  /sys/devices/pci*/** r,
+  /sys/class/drm/** r,
+  /sys/bus/pci/devices/{,**} r,
+  /sys/devices/virtual/tty/tty0/active r,
+  /sys/fs/cgroup/** r,
+  /proc/{,cpuinfo,meminfo,stat,uptime,version,version_signature,filesystems} r,
+  / r,
+  /proc/sys/kernel/{osrelease,random/boot_id,yama/ptrace_scope} r,
+  /proc/sys/{fs/inotify/*,vm/overcommit_memory} r,
+  owner /proc/[0-9]*/{stat,statm,status,cgroup,comm,maps,mountinfo,mounts,limits,auxv,attr/current,attr/apparmor/current,fd/,fd/[0-9]*,task/,task/**} r,
+  owner /proc/[0-9]*/{uid_map,gid_map,setgroups,oom_score_adj} rw,
+  /proc/[0-9]*/{stat,statm,status} r,
+  # Same-user argv may contain secrets; cover both process and thread aliases.
+  audit deny /proc/[0-9]*/{,task/[0-9]*/}{cmdline,mem,environ,pagemap} rw,
+
+  # Native Wayland window and clipboard. No X11/XWayland host socket access.
+  owner /run/user/@{CG_UID}/@{CG_WAYLAND} rw,
+  owner /run/user/@{CG_UID}/bus rw,
+  # PrivateTmp creates a mount namespace. Existing desktop sockets may be
+  # disconnected there: reattach ONLY to an otherwise inaccessible prefix.
+  # Never permit this prefix recursively, or grant it mapped/executable files.
+  /att/chatgpt-desktop/dev/null rw,
+  owner /att/chatgpt-desktop/run/user/@{CG_UID}/{bus,@{CG_WAYLAND}} rw,
+  # No writable desktop-wide settings or certificate databases.
+  deny /run/user/*/{dconf,gsettings}/{,**} rwklmx,
+  # Anonymous IPC plus same-profile sockets; no arbitrary abstract services.
+  unix (create,bind,listen,accept,connect,send,receive) addr=none,
+  unix peer=(label=chatgpt-desktop),
+  # Official browser Work IPC is hard-coded here, independent of TMPDIR.
+  # Require systemd PrivateTmp=yes; pathname sockets do not enforce peer labels.
+  # Permit only this directory and UUID-shaped paths, never general /tmp.
+  owner /tmp/codex-browser-use/ rw,
+  owner /tmp/codex-browser-use/????????-????-????-????-????????????.sock rw,
+  dbus (send,receive) bus=session interface=org.freedesktop.DBus
+       member={Hello,AddMatch,RemoveMatch,GetId,GetNameOwner,NameHasOwner,RequestName,ReleaseName,GetConnectionUnixProcessID,GetConnectionCredentials}
+       peer=(name=org.freedesktop.DBus),
+  dbus (send,receive) bus=session interface=org.freedesktop.Notifications
+       peer=(name=org.freedesktop.Notifications),
+  dbus (send,receive) bus=session interface=org.freedesktop.portal.Settings
+       peer=(name=org.freedesktop.portal.Desktop),
+  # Request completion signals use the portal's unique bus name. Scope their
+  # receipt to this interface/path instead of a well-known destination name.
+  dbus (receive) bus=session path=/org/freedesktop/portal/desktop/request/**
+       interface=org.freedesktop.portal.Request member=Response
+       peer=(label=unconfined),
+  dbus (send,receive) bus=session interface=org.freedesktop.DBus.Properties
+       peer=(name=org.freedesktop.portal.Desktop),
+  # FileChooser returns selected URIs, not file bytes. Reads still obey the
+  # path policy; deny the document portal mount to prevent alternate aliases.
+  dbus (send,receive) bus=session path=/org/freedesktop/portal/desktop
+       interface=org.freedesktop.portal.FileChooser member={OpenFile,SaveFile,SaveFiles}
+       peer=(name=org.freedesktop.portal.Desktop),
+  audit deny /run/user/*/doc/{,**} rwklmx,
+  # External URL delegation and camera/screen interfaces stay disabled.
+  audit deny dbus bus=session interface=org.freedesktop.portal.{OpenURI,Camera,ScreenCast,Screenshot,RemoteDesktop,GlobalShortcuts},
+  deny dbus bus=session peer=(name=org.freedesktop.systemd1),
+  deny dbus bus=session peer=(name=org.gnome.Shell*),
+  deny dbus bus=session peer=(name=org.freedesktop.secrets),
+  deny dbus bus=system,
+  deny /tmp/.X11-unix/** rw,
+  deny /run/dbus/system_bus_socket rw,
+  deny /{run,var/run}/tailscale/{,**} rwklmx,
+  deny /run/user/*/{at-spi/**,gnupg/**,keyring/**,ssh-agent*,pipewire-*} rw,
+  deny /tmp/ssh-*/agent.* rw,
+
+  # Default deny all other personal files. Hidden components anywhere in the
+  # real home stay denied, even inside attachment/download trees. The ONLY
+  # hidden-file exceptions are dedicated state and this fixed vendor manifest.
+  owner @{CG_HOME}/ r,
+  owner @{CG_ATTACHMENTS}/{,**} r,
+  owner @{CG_DOWNLOADS}/{,**} rwk,
+  priority=20 audit deny /{,**/}.*{,/**} rwklmx,
+  priority=30 owner @{CG_APPDATA}/{,**} rwk,
+  # Official bundled-plugin discovery; root-owned app data, read-only, no exec.
+  priority=30 /usr/lib/chatgpt/resources/plugins/openai-bundled/.agents/plugins/marketplace.json r,
+  priority=50 audit deny @{CG_BLOCKED}/{,**} rwklmx,
+  # Even in an explicitly shared tree, conventional credential folders are
+  # excluded. Do not place secrets under another name in a shared tree.
+  priority=50 audit deny @{CG_HOME}/{,**/}{Credentials,credentials,Secrets,secrets,Keys,keys}/{,**} rwklmx,
+  # Native host discovery gets metadata, never its dedicated private key.
+  priority=40 audit deny @{CG_APPDATA}/.ssh/{,**} rwklmx,
+  priority=45 owner @{CG_APPDATA}/.ssh/{,config} r,
+  priority=40 audit deny @{CG_APPDATA}/.ssh/config wklmx,
+  # Runtime shared memory is restricted to Chromium's own file naming scheme.
+  owner /memfd:* rw,
+
+  # Pulse is a command broker with unconfined module loading, not audio-only.
+  # Deny it rather than allow a broker to execute app-written plugin bytes.
+  audit deny /{run,var/run}/user/*/pulse/{,**} rwklmx,
+  deny /dev/snd/** rw,
+  /dev/dri/renderD[0-9]* rw,
+  /dev/dri/ r,
+  deny /dev/{video[0-9]*,input/**,uinput,mem,kmem,port,fb*,dri/card*} rw,
+
+  network inet stream,
+  network inet6 stream,
+  network inet dgram,
+  network inet6 dgram,
+  network netlink raw,
+  userns,
+  capability sys_admin,
+  capability sys_chroot,
+  # These authorize namespace sandbox operations, not root privileges.
+  deny mount,
+  deny umount,
+  deny pivot_root,
+  deny change_profile,
+  ptrace (read,trace) peer=chatgpt-desktop,
+  signal (send,receive) peer=chatgpt-desktop,
+  signal (receive) peer=unconfined,
+  signal (receive) set=(chld) peer=chatgpt-desktop//{ssh,paths},
+  signal (send) set=(term,int,kill) peer=chatgpt-desktop//{ssh,paths},
+
+  profile paths {
+    include <abstractions/base>
+    /usr/bin/pwd mr,
+    /usr/lib/cargo/bin/coreutils/pwd mr,
+    /proc/sys/kernel/osrelease r,
+    owner /proc/[0-9]*/{cwd,attr/current,attr/apparmor/current} r,
+    / r,
+    /home/ r,
+    owner @{CG_HOME}/{,**/} r,
+    priority=50 audit deny @{CG_BLOCKED}/{,**} rwklmx,
+    priority=20 audit deny /{,**/}.*{,/**} rwklmx,
+    priority=30 owner @{CG_APPDATA}/{,**/} r,
+    audit deny /run/user/*/doc/{,**} rwklmx,
+    deny network inet,
+    deny network inet6,
+    unix (send,receive) type=stream peer=(label=chatgpt-desktop),
+    unix (send,receive) type=stream peer=(label=unconfined),
+    deny dbus,
+    deny capability,
+    deny /{,usr/}bin/** x,
+    deny /usr/lib/cargo/bin/coreutils/** x,
+    signal (send,receive) peer=chatgpt-desktop,
+    signal (receive) peer=unconfined,
+  }
+
+  profile ssh {
+    include <abstractions/base>
+    include <abstractions/nameservice-strict>
+    /usr/bin/ssh mr,
+    /etc/ssh/{,**} r,
+    priority=30 owner @{CG_APPDATA}/.ssh/ r,
+    priority=30 owner @{CG_APPDATA}/.ssh/{config,known_hosts,known_hosts.old} r,
+    priority=30 owner @{CG_SSH_KEY}{,.pub} r,
+    /dev/tty rw,
+    owner /dev/pts/[0-9]* rw,
+    network inet stream,
+    network inet6 stream,
+    network inet dgram,
+    network inet6 dgram,
+    network netlink raw,
+    unix (create,bind,listen,accept,connect,send,receive) addr=none,
+    unix peer=(label=chatgpt-desktop//ssh),
+    priority=50 audit deny @{CG_BLOCKED}/{,**} rwklmx,
+    priority=20 audit deny /{,**/}.*{,/**} rwklmx,
+    priority=30 owner @{CG_APPDATA}/{,**/} r,
+    deny /run/user/*/{gnupg/**,keyring/**,ssh-agent*} rw,
+    deny /tmp/ssh-*/agent.* rw,
+    deny dbus,
+    deny mount,
+    deny change_profile,
+    signal (send,receive) peer=chatgpt-desktop,
+    signal (send,receive) peer=chatgpt-desktop//ssh,
+    signal (receive) peer=unconfined,
+    # No executable permissions: ProxyCommand/LocalCommand cannot run.
+  }
+
+}
+
