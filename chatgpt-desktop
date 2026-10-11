@@ -1,6 +1,6 @@
 # ChatGPT desktop: strict resource policy, Ubuntu 26.04 amd64.
 # Verified 2026-10-11: 36 resource checks, HTTPS and native Tailscale SSH tasks.
-# See GOALS-AND-REPORT.md for exact scope. No custom runtime programs required.
+# See README.md for exact scope. No custom runtime programs required.
 #
 # GOALS: no local privilege elevation or arbitrary executable launches; no
 # personal hidden-file or Documents/Private access; only configured attachment
@@ -23,6 +23,9 @@
 #   mkdir -p "$app_state/tmp"
 #   sudo systemd-run --unit=chatgpt-confined --collect \
 #     --uid="$(id -u)" --gid="$(id -g)" -p PrivateTmp=yes \
+#     -p AssertSecurity=apparmor \
+#     -p "ExecCondition=+/usr/bin/cmp -s $HOME/ChatGPT-Setup/chatgpt-desktop /etc/apparmor.d/chatgpt" \
+#     -p "ExecStartPre=+/usr/bin/grep -q ^chatgpt-desktop[[:space:]](enforce) /sys/kernel/security/apparmor/profiles" \
 #     --working-directory="$app_state" \
 #     --setenv=HOME="$app_state" --setenv=TMPDIR="$app_state/tmp" \
 #     --setenv=CODEX_HOME="$app_state/.codex" \
@@ -36,7 +39,9 @@
 #     /usr/lib/chatgpt/ChatGPT --ozone-platform=wayland --disable-dev-shm-usage
 # Run from your graphical session; preserve its runtime directory and D-Bus.
 # Verify systemctl show chatgpt-confined -p PrivateTmp -p User -p MainPID.
-# Do not launch through the ordinary icon without this required isolation.
+# The supplied chatgpt-confined.desktop runs this command without a helper script.
+# Install it as the per-user chatgpt.desktop icon; configure its home/UID/GID/socket.
+# Do not launch through an unmodified vendor icon without this required isolation.
 # In this app-specific CODEX_HOME/config.toml, set the stock [desktop] setting:
 #   projectlessWorkspaceRoot = "/home/YOUR_USER/ChatGPT/Downloads/Work"
 #

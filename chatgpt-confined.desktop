@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=ChatGPT (confined)
+Comment=ChatGPT with AppArmor and private temporary files
+Icon=chatgpt
+Terminal=true
+Categories=Utility;
+StartupNotify=false
+# Before installing: replace /home/dummy, UID 1000, GID 1000 and wayland-0.
+# Get values with: printf '%s\n' "$HOME" "$WAYLAND_DISPLAY"; id -u; id -g
+# Install as ~/.local/share/applications/chatgpt.desktop to override the vendor icon.
+Exec=/usr/bin/sudo /usr/bin/systemd-run --unit=chatgpt-confined --collect --uid=1000 --gid=1000 --property=PrivateTmp=yes --property=AssertSecurity=apparmor "--property=ExecCondition=+/usr/bin/cmp -s /home/dummy/ChatGPT-Setup/chatgpt-desktop /etc/apparmor.d/chatgpt" "--property=ExecStartPre=+/usr/bin/grep -q ^chatgpt-desktop[[:space:]](enforce) /sys/kernel/security/apparmor/profiles" --working-directory=/home/dummy/ChatGPT/AppData --setenv=HOME=/home/dummy/ChatGPT/AppData --setenv=TMPDIR=/home/dummy/ChatGPT/AppData/tmp --setenv=CODEX_HOME=/home/dummy/ChatGPT/AppData/.codex --setenv=XDG_CONFIG_HOME=/home/dummy/ChatGPT/AppData/.config --setenv=XDG_CACHE_HOME=/home/dummy/ChatGPT/AppData/.cache --setenv=XDG_DATA_HOME=/home/dummy/ChatGPT/AppData/.local/share --setenv=XDG_STATE_HOME=/home/dummy/ChatGPT/AppData/.local/state --setenv=XDG_RUNTIME_DIR=/run/user/1000 --setenv=WAYLAND_DISPLAY=wayland-0 --setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus /usr/lib/chatgpt/ChatGPT --ozone-platform=wayland --disable-dev-shm-usage
